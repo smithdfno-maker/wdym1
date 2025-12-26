@@ -1,9 +1,11 @@
 --[[
     ════════════════════════════════════════════════════════════════════════════
     PAULGG - AFK MARKET AUTOMATION
-    Version: 17.6.1
-    Author: paulgg
-    Verified by: paulgg
+    Version: 17.6.2
+    Author: Misthios
+    Verified by: iPowfu
+    
+    NEW: Auto Trade Ticket System
     ════════════════════════════════════════════════════════════════════════════
 ]]
 
@@ -11,7 +13,7 @@
 -- INITIALIZATION
 -- ═══════════════════════════════════════════════════════════════════════════
 
-local Version = "17.6.1"
+local Version = "17.6.2"
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/download/1.6.62/main.lua"))()
 local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -95,7 +97,7 @@ end
 local Config = {
     -- Pet Settings
     TargetName = "",
-    MaxWeight = 3.0,
+    MaxWeight = 2.0,
     TargetAmount = 1,
     
     -- Market Settings
@@ -118,6 +120,10 @@ local Config = {
     AntiAFK = true,
     WebhookURL = "",
     
+    -- Auto Trade Ticket
+    AutoTradeTicket = false,
+    TradeTicketDelay = 5,
+    
     -- Session
     StartTime = os.time()
 }
@@ -127,7 +133,8 @@ local Stats = {
     Gems = 0,
     CurrentlyListed = 0,
     CurrentTokens = 0,
-    Status = "Idle"
+    Status = "Idle",
+    TradesAccepted = 0
 }
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -147,7 +154,6 @@ function UIManager:Initialize(windowInstance)
 end
 
 function UIManager:CreateToggleButton()
-    -- Create persistent toggle button in ScreenGui
     local screenGui = Instance.new("ScreenGui")
     screenGui.Name = "PaulGG_Toggle"
     screenGui.ResetOnSpawn = false
@@ -180,21 +186,22 @@ function UIManager:CreateToggleButton()
     button.Text = ""
     button.Parent = toggleFrame
     
-    -- Button hover effect
     button.MouseEnter:Connect(function()
         toggleFrame.BackgroundColor3 = Color3.fromHex("#9290FF")
     end)
     
     button.MouseLeave:Connect(function()
-        toggleFrame.BackgroundColor3 = Color3.fromHex("#7775F2")
+        if self.IsVisible then
+            toggleFrame.BackgroundColor3 = Color3.fromHex("#7775F2")
+        else
+            toggleFrame.BackgroundColor3 = Color3.fromHex("#444444")
+        end
     end)
     
-    -- Button click
     button.MouseButton1Click:Connect(function()
         self:Toggle()
     end)
     
-    -- Make draggable
     local dragging = false
     local dragInput, dragStart, startPos
     
@@ -232,7 +239,6 @@ function UIManager:CreateToggleButton()
     
     self.ToggleButton = screenGui
     
-    -- Parent to appropriate location
     if gethui then
         screenGui.Parent = gethui()
     elseif syn and syn.protect_gui then
@@ -247,7 +253,6 @@ function UIManager:SetupKeybinds()
     UserInputService.InputBegan:Connect(function(input, gameProcessed)
         if gameProcessed then return end
         
-        -- Right Control or Insert key to toggle
         if input.KeyCode == Enum.KeyCode.RightControl or input.KeyCode == Enum.KeyCode.Insert then
             self:Toggle()
         end
@@ -258,7 +263,6 @@ function UIManager:Toggle()
     self.IsVisible = not self.IsVisible
     
     if self.UIInstance then
-        -- Try multiple methods to toggle UI
         pcall(function()
             if self.UIInstance.Toggle then
                 self.UIInstance:Toggle()
@@ -269,7 +273,6 @@ function UIManager:Toggle()
             end
         end)
         
-        -- Try to find and toggle the main GUI element
         pcall(function()
             local gui = LocalPlayer.PlayerGui:FindFirstChild("WindUI") or 
                        (gethui and gethui():FindFirstChild("WindUI")) or
@@ -281,7 +284,6 @@ function UIManager:Toggle()
         end)
     end
     
-    -- Update toggle button appearance
     if self.ToggleButton then
         local frame = self.ToggleButton:FindFirstChild("ToggleFrame")
         if frame then
@@ -291,32 +293,6 @@ function UIManager:Toggle()
                 frame.BackgroundColor3 = Color3.fromHex("#444444")
             end
         end
-    end
-end
-
-function UIManager:Hide()
-    self.IsVisible = false
-    if self.UIInstance then
-        pcall(function()
-            if self.UIInstance.SetVisible then
-                self.UIInstance:SetVisible(false)
-            elseif self.UIInstance.Visible ~= nil then
-                self.UIInstance.Visible = false
-            end
-        end)
-    end
-end
-
-function UIManager:Show()
-    self.IsVisible = true
-    if self.UIInstance then
-        pcall(function()
-            if self.UIInstance.SetVisible then
-                self.UIInstance:SetVisible(true)
-            elseif self.UIInstance.Visible ~= nil then
-                self.UIInstance.Visible = true
-            end
-        end)
     end
 end
 
@@ -341,7 +317,6 @@ local function CreateWindow()
         }
     })
 
-    -- Add Tags
     Window:Tag({
         Title = "iPowfu",
         Icon = "solar:verified-check-bold",
@@ -372,6 +347,7 @@ local function CreateDashboard(MonitorTab)
     DashboardButtons.Token = DashSec:Button({ Title = "Wallet: Initializing..." })
     DashboardButtons.Booth = DashSec:Button({ Title = "Booth: 0/50 Items" })
     DashboardButtons.Session = DashSec:Button({ Title = "Session Profit: 0 Tokens" })
+    DashboardButtons.Trades = DashSec:Button({ Title = "Trades Accepted: 0" })
     DashboardButtons.Time = DashSec:Button({ Title = "Uptime: 0h 0m" })
 end
 
@@ -391,7 +367,6 @@ local function UpdateTokenDisplay()
         end
     end
 
-    -- Connect to token updates
     DataService:GetPathSignal("TradeData/Tokens"):Connect(forceSync)
     forceSync()
 end
@@ -425,7 +400,6 @@ local function StartDashboardMonitoring()
         UpdateTokenDisplay()
         
         while task.wait(1) do
-            -- Update Uptime
             local diff = os.difftime(os.time(), Config.StartTime)
             local hours = math.floor(diff / 3600)
             local minutes = math.floor((diff % 3600) / 60)
@@ -433,10 +407,8 @@ local function StartDashboardMonitoring()
                 string.format("Uptime: %dh %dm", hours, minutes)
             )
             
-            -- Update Status
             DashboardButtons.Status:SetTitle("Status: " .. Stats.Status)
             
-            -- Update Booth Count
             Stats.CurrentlyListed = CountBoothItems()
             DashboardButtons.Booth:SetTitle(
                 string.format("Booth: %d/%d Items", Stats.CurrentlyListed, Config.MaxBoothItems)
@@ -481,11 +453,9 @@ local function ScanAndListPets()
     local targetNameLower = Config.TargetName:lower()
     
     for _, item in pairs(backpack:GetChildren()) do
-        -- Check limits
         if listedCount >= Config.TargetAmount then break end
         if (Stats.CurrentlyListed + listedCount) >= Config.MaxBoothItems then break end
         
-        -- Check if item matches target
         if string.find(item.Name:lower(), targetNameLower) then
             if ListPetToBooth(item) then
                 listedCount = listedCount + 1
@@ -502,7 +472,6 @@ function StartRhythmScan()
     
     task.spawn(function()
         while Config.AutoLoop do
-            -- Wait if booth is full
             if Stats.CurrentlyListed >= Config.MaxBoothItems then
                 Stats.Status = "Booth Full (Waiting)"
                 repeat
@@ -512,12 +481,10 @@ function StartRhythmScan()
                 if not Config.AutoLoop then break end
             end
 
-            -- List items
             Config.IsRunning = true
             Stats.Status = "Listing Items"
             ScanAndListPets()
             
-            -- Wait before next cycle
             Stats.Status = "Standby (Delay)"
             Config.IsRunning = false
             task.wait(Config.LoopDelay)
@@ -525,6 +492,157 @@ function StartRhythmScan()
         
         Stats.Status = "Idle"
     end)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- AUTO TRADE TICKET SYSTEM
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local TradeTicketManager = {
+    IsProcessing = false,
+    LastTradeId = nil,
+    TradeQueue = {},
+    ProcessedTrades = {}
+}
+
+function TradeTicketManager:ProcessTrade(tradeId)
+    if self.ProcessedTrades[tradeId] then
+        print("[PAULGG] Trade already processed: " .. tradeId)
+        return
+    end
+    
+    if self.IsProcessing then
+        table.insert(self.TradeQueue, tradeId)
+        print("[PAULGG] Trade queued: " .. tradeId)
+        return
+    end
+    
+    self.IsProcessing = true
+    self.LastTradeId = tradeId
+    self.ProcessedTrades[tradeId] = true
+    
+    task.spawn(function()
+        print("[PAULGG] Processing trade: " .. tradeId)
+        
+        -- Step 1: Wait 5 seconds
+        task.wait(Config.TradeTicketDelay)
+        
+        -- Step 2: Accept trade request
+        local success1 = pcall(function()
+            ReplicatedStorage.GameEvents.TradeEvents.RespondRequest:FireServer(tradeId, true)
+        end)
+        
+        if success1 then
+            print("[PAULGG] ✓ Trade request accepted")
+            
+            -- Wait for UI to appear
+            task.wait(2)
+            
+            -- Step 3: Click "Yes" button in confirmation GUI
+            local clickedYes = false
+            pcall(function()
+                local playerGui = LocalPlayer.PlayerGui
+                
+                for _, gui in pairs(playerGui:GetChildren()) do
+                    if gui:IsA("ScreenGui") then
+                        local yesButton = gui:FindFirstChild("Yes", true) or
+                                         gui:FindFirstChild("Accept", true) or
+                                         gui:FindFirstChild("Confirm", true) or
+                                         gui:FindFirstChild("OK", true)
+                        
+                        if yesButton then
+                            if yesButton:IsA("TextButton") or yesButton:IsA("ImageButton") then
+                                pcall(function()
+                                    for _, connection in pairs(getconnections(yesButton.MouseButton1Click)) do
+                                        connection:Fire()
+                                    end
+                                end)
+                                
+                                pcall(function()
+                                    for _, connection in pairs(getconnections(yesButton.Activated)) do
+                                        connection:Fire()
+                                    end
+                                end)
+                                
+                                clickedYes = true
+                                print("[PAULGG] ✓ Confirmation clicked")
+                                break
+                            end
+                        end
+                    end
+                end
+            end)
+            
+            if not clickedYes then
+                print("[PAULGG] ⚠ Could not find confirmation button")
+            end
+            
+            -- Step 4: Wait 5 seconds again
+            task.wait(Config.TradeTicketDelay)
+            
+            -- Step 5: Final accept
+            local success3 = pcall(function()
+                ReplicatedStorage.GameEvents.TradeEvents.RespondRequest:FireServer(tradeId, true)
+            end)
+            
+            if success3 then
+                Stats.TradesAccepted = Stats.TradesAccepted + 1
+                DashboardButtons.Trades:SetTitle(
+                    string.format("Trades Accepted: %d", Stats.TradesAccepted)
+                )
+                print("[PAULGG] ✓ Trade completed successfully! Total: " .. Stats.TradesAccepted)
+            end
+        else
+            print("[PAULGG] ✗ Failed to accept trade request")
+        end
+        
+        self.IsProcessing = false
+        
+        if #self.TradeQueue > 0 then
+            local nextTrade = table.remove(self.TradeQueue, 1)
+            task.wait(1)
+            self:ProcessTrade(nextTrade)
+        end
+    end)
+end
+
+function TradeTicketManager:Start()
+    local events = {
+        "RequestReceived",
+        "TradeRequest",
+        "IncomingTrade",
+        "NewTradeRequest"
+    }
+    
+    for _, eventName in pairs(events) do
+        pcall(function()
+            local event = ReplicatedStorage.GameEvents.TradeEvents:FindFirstChild(eventName)
+            if event and event:IsA("RemoteEvent") then
+                event.OnClientEvent:Connect(function(data)
+                    if not Config.AutoTradeTicket then return end
+                    
+                    local tradeId = nil
+                    if type(data) == "string" then
+                        tradeId = data
+                    elseif type(data) == "table" then
+                        tradeId = data.traderId or data.tradeId or data.id or data.uuid
+                    end
+                    
+                    if tradeId then
+                        print("[PAULGG] Trade request received via " .. eventName .. ": " .. tostring(tradeId))
+                        self:ProcessTrade(tostring(tradeId))
+                    end
+                end)
+                print("[PAULGG] Listening to event: " .. eventName)
+            end
+        end)
+    end
+    
+    print("[PAULGG] Auto Trade Ticket system initialized")
+end
+
+local function StartAutoTradeTicket()
+    TradeTicketManager:Start()
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -617,6 +735,46 @@ local function SetupEliteTab(EliteTab)
             Config.AntiAFK = value
         end
     })
+    
+    local TradeSec = EliteTab:Section({ Title = "Auto Trade Ticket" })
+    
+    TradeSec:Toggle({
+        Title = "Enable Auto Trade Accept",
+        Description = "Sequence: 5s > Accept > Yes > 5s > Accept",
+        Value = false,
+        Callback = function(value)
+            Config.AutoTradeTicket = value
+            if value then
+                print("[PAULGG] Auto Trade Ticket ENABLED")
+                print("[PAULGG] Sequence: Wait 5s > Accept > Click Yes > Wait 5s > Accept")
+            else
+                print("[PAULGG] Auto Trade Ticket DISABLED")
+            end
+        end
+    })
+    
+    TradeSec:Input({
+        Title = "Delay Between Actions (seconds)",
+        Value = "5",
+        Callback = function(value)
+            local delay = tonumber(value)
+            if delay and delay > 0 and delay <= 60 then
+                Config.TradeTicketDelay = delay
+                print("[PAULGG] Trade delay set to: " .. delay .. "s")
+            else
+                print("[PAULGG] Invalid delay. Use 1-60 seconds.")
+            end
+        end
+    })
+    
+    TradeSec:Button({
+        Title = "Test Manual Trade Accept",
+        Description = "Click to manually test trade acceptance",
+        Callback = function()
+            print("[PAULGG] Testing manual trade accept...")
+            print("[PAULGG] Send a trade request to test the system")
+        end
+    })
 end
 
 local function SetupSettingsTab(SettingTab)
@@ -636,6 +794,14 @@ local function SetupSettingsTab(SettingTab)
             UIManager:Toggle()
         end
     })
+    
+    InfoSec:Button({
+        Title = "Clear Processed Trades Cache",
+        Callback = function()
+            TradeTicketManager.ProcessedTrades = {}
+            print("[PAULGG] Trade cache cleared")
+        end
+    })
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -643,16 +809,12 @@ end
 -- ═══════════════════════════════════════════════════════════════════════════
 
 local function Initialize()
-    -- Register themes
     RegisterThemes()
     
-    -- Create window
     local Window = CreateWindow()
     
-    -- Initialize UI Manager
     UIManager:Initialize(Window)
     
-    -- Create tabs
     local MonitorTab = Window:Tab({
         Title = "Dashboard",
         Icon = "solar:chart-bold",
@@ -677,22 +839,21 @@ local function Initialize()
         IconColor = Color3.fromHex("#8E8E93")
     })
     
-    -- Setup tabs
     CreateDashboard(MonitorTab)
     SetupMainTab(MainTab)
     SetupEliteTab(EliteTab)
     SetupSettingsTab(SettingTab)
     
-    -- Start systems
     StartDashboardMonitoring()
+    StartAutoTradeTicket()
     StartAntiAFK()
     SetupSalesTracking()
     
-    -- Success message
     print("═══════════════════════════════════════")
     print("PAULGG v" .. Version .. " Loaded!")
     print("Toggle UI: Right Control or Insert Key")
     print("Draggable Button: Left Side of Screen")
+    print("NEW: Auto Trade Ticket System Added!")
     print("═══════════════════════════════════════")
 end
 
