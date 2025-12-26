@@ -1,11 +1,11 @@
 --[[
     ════════════════════════════════════════════════════════════════════════════
     PAULGG - AFK MARKET AUTOMATION
-    Version: 17.6.2
+    Version: 17.7.0
     Author: Misthios
     Verified by: iPowfu
     
-    NEW: Auto Trade Ticket System
+    NEW: Infinite Trade Submitter + Auto Accept Incoming Trade
     ════════════════════════════════════════════════════════════════════════════
 ]]
 
@@ -13,7 +13,7 @@
 -- INITIALIZATION
 -- ═══════════════════════════════════════════════════════════════════════════
 
-local Version = "17.6.2"
+local Version = "17.7.0"
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/download/1.6.62/main.lua"))()
 local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -29,7 +29,6 @@ local LocalPlayer = Players.LocalPlayer
 -- ═══════════════════════════════════════════════════════════════════════════
 
 local function RegisterThemes()
-    -- Cyber Midnight Theme
     WindUI:AddTheme({
         Name = "Cyber Midnight",
         Accent = Color3.fromHex("#7775F2"),
@@ -49,7 +48,6 @@ local function RegisterThemes()
         ToggleBar = Color3.fromHex("#FFFFFF"),
     })
 
-    -- Rose Gold Theme
     WindUI:AddTheme({
         Name = "Rose Gold",
         Accent = Color3.fromHex("#FF7B9C"),
@@ -69,7 +67,6 @@ local function RegisterThemes()
         ToggleBar = Color3.fromHex("#FFFFFF"),
     })
 
-    -- Emerald Forest Theme
     WindUI:AddTheme({
         Name = "Emerald Forest",
         Accent = Color3.fromHex("#30ff6a"),
@@ -120,9 +117,15 @@ local Config = {
     AntiAFK = true,
     WebhookURL = "",
     
-    -- Auto Trade Ticket
-    AutoTradeTicket = false,
-    TradeTicketDelay = 5,
+    -- Incoming Trade Settings
+    AutoAcceptRequest = false,
+    
+    -- Infinite Trade Submitter
+    TradePetName = "",
+    TradeMaxWeight = 3.0,
+    AutoAccept3Stage = false,
+    AutoAddPetLoop = false,
+    TradeTargetPlayer = "",
     
     -- Session
     StartTime = os.time()
@@ -134,7 +137,9 @@ local Stats = {
     CurrentlyListed = 0,
     CurrentTokens = 0,
     Status = "Idle",
-    TradesAccepted = 0
+    TradesAccepted = 0,
+    TradesSent = 0,
+    PetsTraded = 0
 }
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -347,8 +352,12 @@ local function CreateDashboard(MonitorTab)
     DashboardButtons.Token = DashSec:Button({ Title = "Wallet: Initializing..." })
     DashboardButtons.Booth = DashSec:Button({ Title = "Booth: 0/50 Items" })
     DashboardButtons.Session = DashSec:Button({ Title = "Session Profit: 0 Tokens" })
-    DashboardButtons.Trades = DashSec:Button({ Title = "Trades Accepted: 0" })
     DashboardButtons.Time = DashSec:Button({ Title = "Uptime: 0h 0m" })
+    
+    local TradeSec = MonitorTab:Section({ Title = "Trade Statistics" })
+    DashboardButtons.TradesSent = TradeSec:Button({ Title = "Trades Sent: 0" })
+    DashboardButtons.TradesAccepted = TradeSec:Button({ Title = "Incoming Accepted: 0" })
+    DashboardButtons.PetsTraded = TradeSec:Button({ Title = "Pets Traded: 0" })
 end
 
 local function UpdateTokenDisplay()
@@ -495,154 +504,219 @@ function StartRhythmScan()
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- AUTO TRADE TICKET SYSTEM
+-- INCOMING TRADE AUTO ACCEPT
 -- ═══════════════════════════════════════════════════════════════════════════
 
-local TradeTicketManager = {
-    IsProcessing = false,
-    LastTradeId = nil,
-    TradeQueue = {},
-    ProcessedTrades = {}
+local IncomingTradeManager = {
+    ProcessedRequests = {}
 }
 
-function TradeTicketManager:ProcessTrade(tradeId)
-    if self.ProcessedTrades[tradeId] then
-        print("[PAULGG] Trade already processed: " .. tradeId)
-        return
+function IncomingTradeManager:AutoAccept(data)
+    if not Config.AutoAcceptRequest then return end
+    
+    local requestId = nil
+    if type(data) == "string" then
+        requestId = data
+    elseif type(data) == "table" then
+        requestId = data.traderId or data.requestId or data.id
     end
     
-    if self.IsProcessing then
-        table.insert(self.TradeQueue, tradeId)
-        print("[PAULGG] Trade queued: " .. tradeId)
-        return
-    end
+    if not requestId or self.ProcessedRequests[requestId] then return end
     
-    self.IsProcessing = true
-    self.LastTradeId = tradeId
-    self.ProcessedTrades[tradeId] = true
+    self.ProcessedRequests[requestId] = true
     
     task.spawn(function()
-        print("[PAULGG] Processing trade: " .. tradeId)
+        task.wait(1)
         
-        -- Step 1: Wait 5 seconds
-        task.wait(Config.TradeTicketDelay)
-        
-        -- Step 2: Accept trade request
-        local success1 = pcall(function()
-            ReplicatedStorage.GameEvents.TradeEvents.RespondRequest:FireServer(tradeId, true)
+        local success = pcall(function()
+            ReplicatedStorage.GameEvents.TradeEvents.RespondRequest:FireServer(requestId, true)
         end)
         
-        if success1 then
-            print("[PAULGG] ✓ Trade request accepted")
-            
-            -- Wait for UI to appear
-            task.wait(2)
-            
-            -- Step 3: Click "Yes" button in confirmation GUI
-            local clickedYes = false
-            pcall(function()
-                local playerGui = LocalPlayer.PlayerGui
-                
-                for _, gui in pairs(playerGui:GetChildren()) do
-                    if gui:IsA("ScreenGui") then
-                        local yesButton = gui:FindFirstChild("Yes", true) or
-                                         gui:FindFirstChild("Accept", true) or
-                                         gui:FindFirstChild("Confirm", true) or
-                                         gui:FindFirstChild("OK", true)
-                        
-                        if yesButton then
-                            if yesButton:IsA("TextButton") or yesButton:IsA("ImageButton") then
-                                pcall(function()
-                                    for _, connection in pairs(getconnections(yesButton.MouseButton1Click)) do
-                                        connection:Fire()
-                                    end
-                                end)
-                                
-                                pcall(function()
-                                    for _, connection in pairs(getconnections(yesButton.Activated)) do
-                                        connection:Fire()
-                                    end
-                                end)
-                                
-                                clickedYes = true
-                                print("[PAULGG] ✓ Confirmation clicked")
-                                break
-                            end
-                        end
-                    end
-                end
-            end)
-            
-            if not clickedYes then
-                print("[PAULGG] ⚠ Could not find confirmation button")
-            end
-            
-            -- Step 4: Wait 5 seconds again
-            task.wait(Config.TradeTicketDelay)
-            
-            -- Step 5: Final accept
-            local success3 = pcall(function()
-                ReplicatedStorage.GameEvents.TradeEvents.RespondRequest:FireServer(tradeId, true)
-            end)
-            
-            if success3 then
-                Stats.TradesAccepted = Stats.TradesAccepted + 1
-                DashboardButtons.Trades:SetTitle(
-                    string.format("Trades Accepted: %d", Stats.TradesAccepted)
-                )
-                print("[PAULGG] ✓ Trade completed successfully! Total: " .. Stats.TradesAccepted)
-            end
-        else
-            print("[PAULGG] ✗ Failed to accept trade request")
-        end
-        
-        self.IsProcessing = false
-        
-        if #self.TradeQueue > 0 then
-            local nextTrade = table.remove(self.TradeQueue, 1)
-            task.wait(1)
-            self:ProcessTrade(nextTrade)
+        if success then
+            Stats.TradesAccepted = Stats.TradesAccepted + 1
+            DashboardButtons.TradesAccepted:SetTitle(
+                string.format("Incoming Accepted: %d", Stats.TradesAccepted)
+            )
+            print("[PAULGG] ✓ Auto-accepted incoming trade: " .. requestId)
         end
     end)
 end
 
-function TradeTicketManager:Start()
-    local events = {
-        "RequestReceived",
-        "TradeRequest",
-        "IncomingTrade",
-        "NewTradeRequest"
-    }
+function IncomingTradeManager:Start()
+    local events = {"RequestReceived", "TradeRequest", "IncomingTrade"}
     
     for _, eventName in pairs(events) do
         pcall(function()
             local event = ReplicatedStorage.GameEvents.TradeEvents:FindFirstChild(eventName)
             if event and event:IsA("RemoteEvent") then
                 event.OnClientEvent:Connect(function(data)
-                    if not Config.AutoTradeTicket then return end
-                    
-                    local tradeId = nil
-                    if type(data) == "string" then
-                        tradeId = data
-                    elseif type(data) == "table" then
-                        tradeId = data.traderId or data.tradeId or data.id or data.uuid
-                    end
-                    
-                    if tradeId then
-                        print("[PAULGG] Trade request received via " .. eventName .. ": " .. tostring(tradeId))
-                        self:ProcessTrade(tostring(tradeId))
-                    end
+                    self:AutoAccept(data)
                 end)
-                print("[PAULGG] Listening to event: " .. eventName)
             end
         end)
     end
     
-    print("[PAULGG] Auto Trade Ticket system initialized")
+    print("[PAULGG] Incoming Trade Auto-Accept initialized")
 end
 
-local function StartAutoTradeTicket()
-    TradeTicketManager:Start()
+-- ═══════════════════════════════════════════════════════════════════════════
+-- INFINITE TRADE SUBMITTER
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local TradeSubmitter = {
+    IsRunning = false,
+    CurrentTradeId = nil,
+    PetsInTrade = {}
+}
+
+function TradeSubmitter:GetPetsByName()
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+    if not backpack then return {} end
+    
+    local pets = {}
+    local targetNameLower = Config.TradePetName:lower()
+    
+    for _, item in pairs(backpack:GetChildren()) do
+        if string.find(item.Name:lower(), targetNameLower) then
+            local weight = tonumber(string.match(item.Name, "%d+%.?%d*")) or 0
+            local uuid = item:GetAttribute("PET_UUID")
+            
+            if uuid and weight <= Config.TradeMaxWeight then
+                table.insert(pets, {
+                    uuid = uuid,
+                    name = item.Name,
+                    weight = weight
+                })
+            end
+        end
+    end
+    
+    return pets
+end
+
+function TradeSubmitter:SendTradeRequest()
+    if Config.TradeTargetPlayer == "" then
+        print("[PAULGG] ✗ No target player specified")
+        return false
+    end
+    
+    local targetPlayer = Players:FindFirstChild(Config.TradeTargetPlayer)
+    if not targetPlayer then
+        print("[PAULGG] ✗ Target player not found: " .. Config.TradeTargetPlayer)
+        return false
+    end
+    
+    local success = pcall(function()
+        ReplicatedStorage.GameEvents.TradeEvents.SendRequest:FireServer(targetPlayer)
+    end)
+    
+    if success then
+        Stats.TradesSent = Stats.TradesSent + 1
+        DashboardButtons.TradesSent:SetTitle(
+            string.format("Trades Sent: %d", Stats.TradesSent)
+        )
+        print("[PAULGG] ✓ Trade request sent to: " .. Config.TradeTargetPlayer)
+        return true
+    else
+        print("[PAULGG] ✗ Failed to send trade request")
+        return false
+    end
+end
+
+function TradeSubmitter:AddPetToTrade(petUUID)
+    local success = pcall(function()
+        ReplicatedStorage.GameEvents.TradeEvents.AddItem:FireServer("Pet", petUUID)
+    end)
+    
+    if success then
+        table.insert(self.PetsInTrade, petUUID)
+        Stats.PetsTraded = Stats.PetsTraded + 1
+        DashboardButtons.PetsTraded:SetTitle(
+            string.format("Pets Traded: %d", Stats.PetsTraded)
+        )
+        print("[PAULGG] ✓ Pet added to trade: " .. petUUID)
+        return true
+    else
+        print("[PAULGG] ✗ Failed to add pet: " .. petUUID)
+        return false
+    end
+end
+
+function TradeSubmitter:ConfirmTrade()
+    local success = pcall(function()
+        ReplicatedStorage.GameEvents.TradeEvents.Confirm:FireServer()
+    end)
+    
+    if success then
+        print("[PAULGG] ✓ Trade confirmed")
+        return true
+    else
+        print("[PAULGG] ✗ Failed to confirm trade")
+        return false
+    end
+end
+
+function TradeSubmitter:Execute3StageTrade()
+    if self.IsRunning then
+        print("[PAULGG] Trade already in progress")
+        return
+    end
+    
+    self.IsRunning = true
+    self.PetsInTrade = {}
+    
+    task.spawn(function()
+        print("[PAULGG] Starting 3-Stage Trade...")
+        
+        -- Stage 1: Send trade request
+        if not self:SendTradeRequest() then
+            self.IsRunning = false
+            return
+        end
+        
+        task.wait(3)
+        
+        -- Stage 2: Add pets
+        local pets = self:GetPetsByName()
+        if #pets == 0 then
+            print("[PAULGG] ✗ No pets found matching criteria")
+            self.IsRunning = false
+            return
+        end
+        
+        print("[PAULGG] Found " .. #pets .. " pets to trade")
+        
+        for i, pet in ipairs(pets) do
+            if self:AddPetToTrade(pet.uuid) then
+                print(string.format("[PAULGG] Added pet %d/%d: %s (%.1fkg)", i, #pets, pet.name, pet.weight))
+                task.wait(0.5)
+            end
+        end
+        
+        task.wait(2)
+        
+        -- Stage 3: Confirm
+        if Config.AutoAccept3Stage then
+            self:ConfirmTrade()
+        else
+            print("[PAULGG] ⚠ Auto-accept disabled. Please confirm manually.")
+        end
+        
+        self.IsRunning = false
+        print("[PAULGG] Trade sequence completed")
+    end)
+end
+
+function TradeSubmitter:StartAutoLoop()
+    task.spawn(function()
+        while Config.AutoAddPetLoop do
+            if not self.IsRunning then
+                self:Execute3StageTrade()
+            end
+            
+            task.wait(15) -- Wait 15 seconds between trades
+        end
+    end)
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -725,6 +799,90 @@ local function SetupMainTab(MainTab)
     })
 end
 
+local function SetupTradeTab(TradeTab)
+    -- Incoming Trade Section
+    local IncomingSec = TradeTab:Section({ Title = "Incoming Trade" })
+    
+    IncomingSec:Toggle({
+        Title = "Auto Accept Request",
+        Description = "Automatically accept incoming trade requests",
+        Value = false,
+        Callback = function(value)
+            Config.AutoAcceptRequest = value
+            if value then
+                print("[PAULGG] Auto Accept Request ENABLED")
+            else
+                print("[PAULGG] Auto Accept Request DISABLED")
+            end
+        end
+    })
+    
+    -- Infinite Trade Submitter Section
+    local SubmitterSec = TradeTab:Section({ Title = "Infinite Trade Submitter" })
+    
+    SubmitterSec:Input({
+        Title = "Nama Pet (Trade)",
+        Placeholder = "Enter Text...",
+        Callback = function(value)
+            Config.TradePetName = value
+            print("[PAULGG] Trade Pet Name: " .. value)
+        end
+    })
+    
+    SubmitterSec:Input({
+        Title = "Max Weight (Trade)",
+        Value = "3.0",
+        Callback = function(value)
+            local weight = tonumber(value)
+            if weight and weight > 0 then
+                Config.TradeMaxWeight = weight
+                print("[PAULGG] Max Trade Weight: " .. weight)
+            end
+        end
+    })
+    
+    SubmitterSec:Input({
+        Title = "Target Player Name",
+        Placeholder = "Enter username...",
+        Callback = function(value)
+            Config.TradeTargetPlayer = value
+            print("[PAULGG] Target Player: " .. value)
+        end
+    })
+    
+    SubmitterSec:Toggle({
+        Title = "Auto Accept (3-Stage)",
+        Description = "Auto confirm trade after adding pets",
+        Value = false,
+        Callback = function(value)
+            Config.AutoAccept3Stage = value
+        end
+    })
+    
+    SubmitterSec:Toggle({
+        Title = "Auto Add Pet Loop",
+        Description = "Continuously send trades with pets",
+        Value = false,
+        Callback = function(value)
+            Config.AutoAddPetLoop = value
+            if value then
+                TradeSubmitter:StartAutoLoop()
+                print("[PAULGG] Auto Trade Loop ENABLED")
+            else
+                print("[PAULGG] Auto Trade Loop DISABLED")
+            end
+        end
+    })
+    
+    SubmitterSec:Button({
+        Title = "Execute Single Trade",
+        Description = "Send one trade with configured pets",
+        Callback = function()
+            TradeSubmitter:Execute3StageTrade()
+        end
+    })
+end
+
 local function SetupEliteTab(EliteTab)
     local EliteSec = EliteTab:Section({ Title = "Elite AFK Protection" })
     
@@ -733,46 +891,6 @@ local function SetupEliteTab(EliteTab)
         Value = true,
         Callback = function(value)
             Config.AntiAFK = value
-        end
-    })
-    
-    local TradeSec = EliteTab:Section({ Title = "Auto Trade Ticket" })
-    
-    TradeSec:Toggle({
-        Title = "Enable Auto Trade Accept",
-        Description = "Sequence: 5s > Accept > Yes > 5s > Accept",
-        Value = false,
-        Callback = function(value)
-            Config.AutoTradeTicket = value
-            if value then
-                print("[PAULGG] Auto Trade Ticket ENABLED")
-                print("[PAULGG] Sequence: Wait 5s > Accept > Click Yes > Wait 5s > Accept")
-            else
-                print("[PAULGG] Auto Trade Ticket DISABLED")
-            end
-        end
-    })
-    
-    TradeSec:Input({
-        Title = "Delay Between Actions (seconds)",
-        Value = "5",
-        Callback = function(value)
-            local delay = tonumber(value)
-            if delay and delay > 0 and delay <= 60 then
-                Config.TradeTicketDelay = delay
-                print("[PAULGG] Trade delay set to: " .. delay .. "s")
-            else
-                print("[PAULGG] Invalid delay. Use 1-60 seconds.")
-            end
-        end
-    })
-    
-    TradeSec:Button({
-        Title = "Test Manual Trade Accept",
-        Description = "Click to manually test trade acceptance",
-        Callback = function()
-            print("[PAULGG] Testing manual trade accept...")
-            print("[PAULGG] Send a trade request to test the system")
         end
     })
 end
@@ -796,10 +914,23 @@ local function SetupSettingsTab(SettingTab)
     })
     
     InfoSec:Button({
-        Title = "Clear Processed Trades Cache",
+        Title = "Clear Trade Cache",
         Callback = function()
-            TradeTicketManager.ProcessedTrades = {}
+            IncomingTradeManager.ProcessedRequests = {}
+            TradeSubmitter.PetsInTrade = {}
             print("[PAULGG] Trade cache cleared")
+        end
+    })
+    
+    local DebugSec = SettingTab:Section({ Title = "Debug Tools" })
+    DebugSec:Button({
+        Title = "List Available Pets",
+        Callback = function()
+            local pets = TradeSubmitter:GetPetsByName()
+            print("[PAULGG] Found " .. #pets .. " pets:")
+            for i, pet in ipairs(pets) do
+                print(string.format("  %d. %s (%.1fkg) - %s", i, pet.name, pet.weight, pet.uuid))
+            end
         end
     })
 end
@@ -827,6 +958,12 @@ local function Initialize()
         IconColor = Color3.fromHex("#007AFF")
     })
     
+    local TradeTab = Window:Tab({
+        Title = "Trade System",
+        Icon = "solar:hand-shake-bold",
+        IconColor = Color3.fromHex("#FF9500")
+    })
+    
     local EliteTab = Window:Tab({
         Title = "AFK Perks",
         Icon = "solar:ghost-bold",
@@ -841,19 +978,19 @@ local function Initialize()
     
     CreateDashboard(MonitorTab)
     SetupMainTab(MainTab)
+    SetupTradeTab(TradeTab)
     SetupEliteTab(EliteTab)
     SetupSettingsTab(SettingTab)
     
     StartDashboardMonitoring()
-    StartAutoTradeTicket()
+    IncomingTradeManager:Start()
     StartAntiAFK()
     SetupSalesTracking()
     
     print("═══════════════════════════════════════")
     print("PAULGG v" .. Version .. " Loaded!")
     print("Toggle UI: Right Control or Insert Key")
-    print("Draggable Button: Left Side of Screen")
-    print("NEW: Auto Trade Ticket System Added!")
+    print("NEW: Trade System with Auto-Accept!")
     print("═══════════════════════════════════════")
 end
 
