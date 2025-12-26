@@ -95,7 +95,7 @@ end
 local Config = {
     -- Pet Settings
     TargetName = "",
-    MaxWeight = 2.0,
+    MaxWeight = 3.0,
     TargetAmount = 1,
     
     -- Market Settings
